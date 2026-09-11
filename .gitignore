@@ -1,0 +1,8 @@
+*.o
+*.elf
+*.hex
+*.map
+tests/test_protocol
+.vscode/
+.idea/
+.DS_Store
