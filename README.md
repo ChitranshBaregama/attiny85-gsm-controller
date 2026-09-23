@@ -1,9 +1,6 @@
 # ATtiny85 + SIM900A GSM Controller
 
 [![build and test](https://github.com/ChitranshBaregama/attiny85-gsm-controller/actions/workflows/ci.yml/badge.svg)](https://github.com/ChitranshBaregama/attiny85-gsm-controller/actions/workflows/ci.yml)
-[![flash](https://img.shields.io/badge/flash-3934%20%2F%208192%20bytes-blue)](docs/DESIGN-NOTES.md#resource-budget)
-[![ram](https://img.shields.io/badge/RAM-280%20%2F%20512%20bytes-blue)](docs/DESIGN-NOTES.md#resource-budget)
-[![tests](https://img.shields.io/badge/host%20tests-44%20checks-brightgreen)](tests/)
 [![licence](https://img.shields.io/badge/licence-MIT-lightgrey)](LICENSE)
 
 Switch something on and off by **missed call** or **SMS**, from an ATtiny85
@@ -14,10 +11,8 @@ bit-banged on two pins at 9600 baud, and the internal RC oscillator — which is
 nowhere near accurate enough for that out of the factory — **calibrates itself
 against the modem** at first boot and remembers the result in EEPROM.
 
-```
-Program:    3934 bytes (48.0% Full)
-Data:        280 bytes (54.7% Full)
-```
+Resource usage is reported by `make -C firmware`. Static RAM excludes the
+stack; physical UART timing and oscillator behavior require hardware tests.
 
 ---
 
@@ -69,7 +64,7 @@ deaf during a burst of URCs and could re-enter the parser.
 ## Tested without hardware
 
 ```bash
-make -C tests      # 44 checks, no chip, no modem
+make -C tests      # protocol regression checks, no chip or modem
 ```
 
 The tests `#include` the **actual sketch** and compile it against a shim that
@@ -83,9 +78,11 @@ arriving before `RING`, SMS authorisation, case-insensitive command matching,
 command de-duplication inside and outside its window, `+CMTI` index parsing,
 and registration states.
 
-One test pins a **known bug** rather than hiding it: `expectBody` has no
-timeout, so a lost SMS body causes the next line — possibly a `RING` — to be
-swallowed. [Listed with the other limitations.](docs/DESIGN-NOTES.md#known-limitations)
+Regression tests cover repeated rings after an action, sender-field boundaries,
+and recovery when an SMS body does not arrive within two seconds, including
+timer wraparound. They exercise the parser and RX pump, not `setup()`, the full
+`loop()`, physical UART timing, or modem hardware.
+[Remaining limitations.](docs/DESIGN-NOTES.md#known-limitations)
 
 ---
 
