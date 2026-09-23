@@ -48,6 +48,7 @@ static void reset_all(void)
 {
     host_millis   = 100000UL;
     expectBody    = false;
+    smsHeaderMs   = 0;
     pendingAction = 0;
     pendingDelete = -1;
     pendingHangup = false;
@@ -109,10 +110,12 @@ static void ring_after_action_re_issues_hangup(void)
     feed("RING");
     CHECK(pendingHangup);
     pendingHangup = false;
+    CHECK(pendingToggle);
+    pendingToggle = false;                 /* consume the first action */
 
     feed("RING");                          /* caller still ringing    */
     CHECK(pendingHangup);                  /* cut again, do not act   */
-    CHECK(!pendingToggle || pendingToggle); /* toggle already queued  */
+    CHECK(!pendingToggle);                /* no second action queued */
 }
 
 static void call_teardown_resets_state(void)
@@ -243,21 +246,53 @@ static void empty_line_is_ignored(void)
     CHECK(!pendingHangup);
 }
 
-/* ---- a known weakness, documented by test --------------------------- */
-
-static void expect_body_has_no_timeout(void)
+/* Recovery uses unsigned subtraction, including clock wraparound. */
+static void sms_body_timeout_recovers_ring(void)
 {
-    /* +CMT: announces that the NEXT line is the message body. If that body
-     * never arrives - a dropped byte, a modem reset mid-message - the flag
-     * stays set and the next unrelated line is parsed as a body.
-     *
-     * Here an unsolicited RING is swallowed as an SMS body instead of
-     * being handled as a call. Documented in docs/DESIGN-NOTES.md. */
     feed("+CMT: \"+919876543210\",\"\",\"\"");
     CHECK(expectBody);
+    host_millis += SMS_BODY_TIMEOUT_MS;
     feed("RING");
-    CHECK(!expectBody);                    /* consumed as a body      */
-    CHECK(ringCount == 0);                 /* the RING was lost       */
+    CHECK(!expectBody);
+    CHECK(ringCount == 1);
+    feed("SYSTEM ON");
+    CHECK(pendingAction == 0);
+}
+
+static void sms_body_before_deadline_is_accepted(void)
+{
+    feed("+CMT: \"+919876543210\",\"\",\"\"");
+    host_millis += SMS_BODY_TIMEOUT_MS - 1;
+    feed("SYSTEM ON");
+    CHECK(pendingAction == 1);
+}
+
+static void sms_body_timeout_without_input(void)
+{
+    feed("+CMT: \"+919876543210\",\"\",\"\"");
+    host_millis += SMS_BODY_TIMEOUT_MS;
+    pump(0);
+    CHECK(!expectBody);
+}
+
+static void sms_body_timeout_wraps(void)
+{
+    host_millis = ~0UL - 1000UL;
+    feed("+CMT: \"+919876543210\",\"\",\"\"");
+    host_millis += SMS_BODY_TIMEOUT_MS;
+    feed("RING");
+    CHECK(!expectBody);
+    CHECK(ringCount == 1);
+}
+
+static void sender_match_is_scoped_to_number(void)
+{
+    feed("+CMT: \"+911111111111\",\"9876543210\",\"\"");
+    CHECK(!expectBody);
+    feed("+CMT: \"+9198765432109\",\"\",\"\"");
+    CHECK(!expectBody);
+    feed("+CMT: \"+919876543210\",\"\",\"\"");
+    CHECK(expectBody);
 }
 
 int main(void)
@@ -287,8 +322,12 @@ int main(void)
     RUN(modem_restart_banner_triggers_reinit);
     RUN(empty_line_is_ignored);
 
-    printf("\nknown weakness, pinned by test\n");
-    RUN(expect_body_has_no_timeout);
+    printf("\nSMS recovery and sender boundaries\n");
+    RUN(sms_body_timeout_recovers_ring);
+    RUN(sms_body_before_deadline_is_accepted);
+    RUN(sms_body_timeout_without_input);
+    RUN(sms_body_timeout_wraps);
+    RUN(sender_match_is_scoped_to_number);
 
     printf("\n%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
