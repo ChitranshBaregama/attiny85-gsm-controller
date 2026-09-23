@@ -201,18 +201,16 @@ day; not acceptable if commands can arrive back to back.
 [bit-banging](#why-bit-bang-the-uart). Structural, and the price of a
 software UART with no hardware buffer.
 
-**3. `expectBody` has no timeout.**
-`+CMT:` announces that the *next* line is the message body. If that body
-never arrives — a dropped byte, a modem reset mid-message — the flag stays
-set and the next unrelated line is consumed as a body. A `RING` arriving at
-that moment is swallowed and the call is missed.
-[Pinned by a test](../tests/test_protocol.cpp) so it cannot regress silently.
-*Fix:* clear `expectBody` if the next line does not arrive within a second or
-two, or if it starts with a known URC prefix.
+**3. SMS framing is bounded, but still line-oriented.**
+An authorized `+CMT:` header opens a two-second body window. Both the RX
+pump and line parser expire that window using unsigned elapsed time. A late
+body is ignored; a later modem result is processed normally. An unrelated
+line arriving *within* the body window remains ambiguous in text mode.
+The host regressions cover deadline boundaries, idle expiry and clock wrap.
 
 **4. `line[64]` truncates long messages.**
 The command must appear within the first 63 characters of the SMS body.
-Longer messages are cut. Raising it costs RAM, which is 55% used.
+Longer messages are cut. Raising it costs RAM; check the current build size.
 
 **5. No delivery confirmation.**
 `waitSendOutcome()` returns on `+CMGS` — the modem accepted the message for
@@ -238,24 +236,24 @@ need re-checking.
 ATtiny85: 8 KB flash, 512 B RAM, 512 B EEPROM.
 
 ```
-Program:    3934 bytes (48.0% Full)
-Data:        280 bytes (54.7% Full)
+make -C firmware   # reports current program and static data sizes
 ```
 
-RAM is the tighter constraint, and the breakdown is roughly:
+RAM is the tighter constraint. The data report covers static storage only;
+stack depth has not been measured. The main fixed buffers are:
 
 | | bytes |
 | :--- | ---: |
 | `rxBuf[64]` — the UART ring buffer | 64 |
 | `line[64]` — the current line being assembled | 64 |
-| state variables, flags, timers | ~40 |
-| stack, at its deepest | the rest |
+| state variables, flags, timers | inspect current ELF/map |
+| stack, at its deepest | not measured; must fit remaining RAM |
 
 Every AT command and every message string lives in `PROGMEM`, fetched with
 `pgm_read_byte`. Without that, ~400 bytes of string constants would be copied
 into RAM at startup and the build would not fit.
 
-The `avr-libc` build with the compat shim is **3934 bytes**. The same sketch
+The `avr-libc` build uses a small compat shim. The same sketch
 through the Arduino IDE is larger, because the core brings in its own `main`,
 timer setup and `init()`. On a part where half the flash is already gone, that
 difference is worth having.
