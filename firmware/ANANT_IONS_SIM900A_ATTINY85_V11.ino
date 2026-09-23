@@ -86,6 +86,7 @@ static volatile uint8_t rxTail = 0;
 #define SETTLE_MS       1200UL
 #define HEALTH_MS       30000UL
 #define DEDUP_MS        15000UL
+#define SMS_BODY_TIMEOUT_MS 2000UL
 
 /* ================= AT COMMANDS (PROGMEM) ============== */
 
@@ -119,6 +120,7 @@ static char     line[64];
 static uint8_t  lineLen = 0;
 
 static bool     expectBody = false;
+static unsigned long smsHeaderMs = 0;
 
 static uint8_t  pendingAction = 0;     /* 0 none, 1 ON, 2 OFF */
 static int16_t  pendingDelete = -1;
@@ -285,7 +287,18 @@ static void toUpperStr(char *s)
 
 static bool lineIsFromUser(void)
 {
-  return (strstr(line, USER_MATCH) != NULL);
+  const char *start = strchr(line, '"');
+  if (!start) return false;
+  ++start;
+  const char *end = strchr(start, '"');
+  if (!end) return false;
+  if (*start == '+') ++start;
+  const size_t length = (size_t)(end - start);
+  const size_t suffix = sizeof(USER_MATCH) - 1;
+  if (length < suffix || length > 15) return false;
+  for (const char *p = start; p < end; ++p)
+    if (*p < '0' || *p > '9') return false;
+  return memcmp(end - suffix, USER_MATCH, suffix) == 0;
 }
 
 static int16_t parseTrailingIndex(void)
@@ -557,8 +570,15 @@ static void tryCallAction(void)
  * LINE PARSER - sets flags only, never transmits
  * ============================================================== */
 
+static void expireSmsBody(void)
+{
+  if (expectBody && (unsigned long)(millis() - smsHeaderMs) >= SMS_BODY_TIMEOUT_MS)
+    expectBody = false;
+}
+
 static void onLine(void)
 {
+  expireSmsBody();
   if (!line[0]) return;
 
   if (expectBody) {
@@ -604,6 +624,7 @@ static void onLine(void)
 
   if (!strncmp(line, "+CMT:", 5)) {
     expectBody = lineIsFromUser();
+    smsHeaderMs = millis();
     return;
   }
 
@@ -637,6 +658,7 @@ static void pump(unsigned long ms)
   unsigned long t0 = millis();
   do {
     servicePulse();
+    expireSmsBody();
     while (uartAvailable()) {
       char c = (char)uartRead();
       if (c == '\n') {
